@@ -15,11 +15,18 @@ namespace Microsoft.AspNetCore.Sockets.Common.Tests.Internal.Formatters
     {
         [Theory]
         [InlineData("data: T\r\n\r\n", "")]
+        [InlineData("data: T\r\n\r\n:\r\n", "")]
+        [InlineData("data: T\r\n\r\n:comment\r\n", "")]
         [InlineData("data: T\r\ndata: \r\r\n\r\n", "\r")]
+        [InlineData("data: T\r\n:comment\r\ndata: \r\r\n\r\n", "\r")]
         [InlineData("data: T\r\ndata: A\rB\r\n\r\n", "A\rB")]
         [InlineData("data: T\r\ndata: Hello, World\r\n\r\n", "Hello, World")]
         [InlineData("data: T\r\ndata: Hello, World\r\n\r\n", "Hello, World")]
         [InlineData("data: T\r\ndata: Hello, World\r\n\r\ndata: ", "Hello, World")]
+        [InlineData("data: T\r\ndata: Hello, World\r\n\r\n:comment\r\ndata: ", "Hello, World")]
+        [InlineData("data: T\r\ndata: Hello, World\r\n\r\n:comment", "Hello, World")]
+        [InlineData("data: T\r\ndata: Hello, World\r\n\r\n:comment\r\n", "Hello, World")]
+        [InlineData("data: T\r\ndata: Hello, World\r\n:comment\r\n\r\n", "Hello, World")]
         public void ParseSSEMessageSuccessCases(string encodedMessage, string expectedMessage)
         {
             var buffer = Encoding.UTF8.GetBytes(encodedMessage);
@@ -64,6 +71,9 @@ namespace Microsoft.AspNetCore.Sockets.Common.Tests.Internal.Formatters
 
         [Theory]
         [InlineData("")]
+        [InlineData(":")]
+        [InlineData(":comment")]
+        [InlineData(":comment\r\n")]
         [InlineData("data:")]
         [InlineData("data: \r")]
         [InlineData("data: T\r\nda")]
@@ -72,6 +82,10 @@ namespace Microsoft.AspNetCore.Sockets.Common.Tests.Internal.Formatters
         [InlineData("data: T\r\ndata: Hello, World\r")]
         [InlineData("data: T\r\ndata: Hello, World\r\n")]
         [InlineData("data: T\r\ndata: Hello, World\r\n\r")]
+        [InlineData(":\r\ndata:")]
+        [InlineData("data: T\r\n:\r\n")]
+        [InlineData("data: T\r\n:\r\ndata:")]
+        [InlineData("data: T\r\ndata: Hello, World\r\n:comment")]
         public void ParseSSEMessageIncompleteParseResult(string encodedMessage)
         {
             var buffer = Encoding.UTF8.GetBytes(encodedMessage);
@@ -84,39 +98,47 @@ namespace Microsoft.AspNetCore.Sockets.Common.Tests.Internal.Formatters
         }
 
         [Theory]
-        [InlineData("d", "ata: T\r\ndata: Hello, World\r\n\r\n", "Hello, World")]
-        [InlineData("data: T", "\r\ndata: Hello, World\r\n\r\n", "Hello, World")]
-        [InlineData("data: T\r", "\ndata: Hello, World\r\n\r\n", "Hello, World")]
-        [InlineData("data: T\r\n", "data: Hello, World\r\n\r\n", "Hello, World")]
-        [InlineData("data: T\r\nd", "ata: Hello, World\r\n\r\n", "Hello, World")]
-        [InlineData("data: T\r\ndata: ", "Hello, World\r\n\r\n", "Hello, World")]
-        [InlineData("data: T\r\ndata: Hello, World", "\r\n\r\n", "Hello, World")]
-        [InlineData("data: T\r\ndata: Hello, World\r\n", "\r\n", "Hello, World")]
-        [InlineData("data: T", "\r\ndata: Hello, World\r\n\r\n", "Hello, World")]
-        [InlineData("data: ", "T\r\ndata: Hello, World\r\n\r\n", "Hello, World")]
-        public async Task ParseMessageAcrossMultipleReadsSuccess(string encodedMessagePart1, string encodedMessagePart2, string expectedMessage)
+        [InlineData(new[] { "d", "ata: T\r\ndata: Hello, World\r\n\r\n" }, "Hello, World")]
+        [InlineData(new[] { "data: T", "\r\ndata: Hello, World\r\n\r\n" }, "Hello, World")]
+        [InlineData(new[] { "data: T\r", "\ndata: Hello, World\r\n\r\n" }, "Hello, World")]
+        [InlineData(new[] { "data: T\r\n", "data: Hello, World\r\n\r\n" }, "Hello, World")]
+        [InlineData(new[] { "data: T\r\nd", "ata: Hello, World\r\n\r\n" }, "Hello, World")]
+        [InlineData(new[] { "data: T\r\ndata: ", "Hello, World\r\n\r\n" }, "Hello, World")]
+        [InlineData(new[] { "data: T\r\ndata: Hello, World", "\r\n\r\n" }, "Hello, World")]
+        [InlineData(new[] { "data: T\r\ndata: Hello, World\r\n", "\r\n" }, "Hello, World")]
+        [InlineData(new[] { "data: T", "\r\ndata: Hello, World\r\n\r\n" }, "Hello, World")]
+        [InlineData(new[] { "data: ", "T\r\ndata: Hello, World\r\n\r\n" }, "Hello, World")]
+        [InlineData(new[] { ":", "comment", "\r\n", "d", "ata: T\r\ndata: Hello, World\r\n\r\n" }, "Hello, World")]
+        [InlineData(new[] { "data: T\r\n", ":comment", "\r\n", "data: Hello, World", "\r\n\r\n" }, "Hello, World")]
+        [InlineData(new[] { "data: T\r\ndata: Hello, World\r\n", ":comment\r\n", "\r\n" }, "Hello, World")]
+        public async Task ParseMessageAcrossMultipleReadsSuccess(string[] messageParts, string expectedMessage)
         {
             using (var pipeFactory = new PipeFactory())
             {
+                var parser = new ServerSentEventsMessageParser();
                 var pipe = pipeFactory.Create();
 
-                // Read the first part of the message
-                await pipe.Writer.WriteAsync(Encoding.UTF8.GetBytes(encodedMessagePart1));
+                Message message = default(Message);
+                ReadCursor consumed = default(ReadCursor), examined = default(ReadCursor);
 
-                var result = await pipe.Reader.ReadAsync();
-                var parser = new ServerSentEventsMessageParser();
+                for (var i = 0; i < messageParts.Length; i++)
+                {
+                    var messagePart = messageParts[i];
+                    await pipe.Writer.WriteAsync(Encoding.UTF8.GetBytes(messagePart));
+                    var result = await pipe.Reader.ReadAsync();
 
-                var parseResult = parser.ParseMessage(result.Buffer, out var consumed, out var examined, out Message message);
-                Assert.Equal(ServerSentEventsMessageParser.ParseResult.Incomplete, parseResult);
+                    var parseResult = parser.ParseMessage(result.Buffer, out consumed, out examined, out message);
+                    pipe.Reader.Advance(consumed, examined);
 
-                pipe.Reader.Advance(consumed, examined);
+                    // parse result should be complete only after we parsed the last message part
+                    var expectedResult =
+                        i == messageParts.Length - 1
+                            ? ServerSentEventsMessageParser.ParseResult.Completed
+                            : ServerSentEventsMessageParser.ParseResult.Incomplete;
 
-                // Send the rest of the data and parse the complete message
-                await pipe.Writer.WriteAsync(Encoding.UTF8.GetBytes(encodedMessagePart2));
-                result = await pipe.Reader.ReadAsync();
+                    Assert.Equal(expectedResult, parseResult);
+                }
 
-                parseResult = parser.ParseMessage(result.Buffer, out consumed, out examined, out message);
-                Assert.Equal(ServerSentEventsMessageParser.ParseResult.Completed, parseResult);
                 Assert.Equal(MessageType.Text, message.Type);
                 Assert.Equal(consumed, examined);
 
