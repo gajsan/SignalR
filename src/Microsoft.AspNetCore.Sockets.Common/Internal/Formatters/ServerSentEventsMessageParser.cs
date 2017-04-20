@@ -181,6 +181,11 @@ namespace Microsoft.AspNetCore.Sockets.Internal.Formatters
         {
             EnsureStartsWithDataPrefix(line);
 
+            if (line.Length != 9)
+            {
+                throw new FormatException("Expected a data format message of the form 'data: <MesssageType>'");
+            }
+
             // Skip the "data: " part of the line
             var type = line[_dataPrefix.Length];
             switch (type)
