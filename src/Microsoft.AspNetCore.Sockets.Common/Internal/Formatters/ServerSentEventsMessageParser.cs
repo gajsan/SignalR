@@ -22,6 +22,8 @@ namespace Microsoft.AspNetCore.Sockets.Internal.Formatters
         private static byte[] _sseLineEnding = Encoding.UTF8.GetBytes("\r\n");
         private static byte[] _newLine = Encoding.UTF8.GetBytes(Environment.NewLine);
 
+        private readonly static int _messagTypeLineLength = "data: X\r\n".Length;
+
         private InternalParseState _internalParserState = InternalParseState.ReadMessageType;
         private List<byte[]> _data = new List<byte[]>();
         private MessageType _messageType = MessageType.Text;
@@ -181,7 +183,7 @@ namespace Microsoft.AspNetCore.Sockets.Internal.Formatters
         {
             EnsureStartsWithDataPrefix(line);
 
-            if (line.Length != 9)
+            if (line.Length != _messagTypeLineLength)
             {
                 throw new FormatException("Expected a data format message of the form 'data: <MesssageType>'");
             }
