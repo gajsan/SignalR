@@ -142,7 +142,7 @@ namespace Microsoft.AspNetCore.Sockets.Common.Tests.Internal.Formatters
         [InlineData("data:", " data: \r\n", "Expected a data format message of the form 'data: <MesssageType>'")]
         [InlineData("data: ", "T\r\ndata: Major\r\ndata:  Key\r\ndata:  Alert\r\n\r\\", "Expected a \\r\\n frame ending")]
         [InlineData("data: ", "This is not a message type\r\n", "Expected a data format message of the form 'data: <MesssageType>'")]
-
+        [InlineData("data: T", "his is not a message type\r\n", "Expected a data format message of the form 'data: <MesssageType>'")]
         public async Task ParseMessageAcrossMultipleReadsFailure(string encodedMessagePart1, string encodedMessagePart2, string expectedMessage)
         {
             using (var pipeFactory = new PipeFactory())

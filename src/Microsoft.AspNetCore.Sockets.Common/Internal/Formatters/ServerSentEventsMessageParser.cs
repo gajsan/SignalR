@@ -88,6 +88,12 @@ namespace Microsoft.AspNetCore.Sockets.Internal.Formatters
                 switch (_internalParserState)
                 {
                     case InternalParseState.ReadMessageType:
+                        EnsureStartsWithDataPrefix(line);
+                        if (line.Length != _messagTypeLineLength)
+                        {
+                            throw new FormatException("Expected a data format message of the form 'data: <MesssageType>'");
+                        }
+
                         _messageType = GetMessageType(line);
 
                         _internalParserState = InternalParseState.ReadMessagePayload;
@@ -96,6 +102,7 @@ namespace Microsoft.AspNetCore.Sockets.Internal.Formatters
                         consumed = lineEnd;
                         break;
                     case InternalParseState.ReadMessagePayload:
+                        EnsureStartsWithDataPrefix(line);
 
                         // Slice away the 'data: '
                         var payloadLength = line.Length - (_dataPrefix.Length + _sseLineEnding.Length);
@@ -181,13 +188,6 @@ namespace Microsoft.AspNetCore.Sockets.Internal.Formatters
 
         private MessageType GetMessageType(ReadOnlySpan<byte> line)
         {
-            EnsureStartsWithDataPrefix(line);
-
-            if (line.Length != _messagTypeLineLength)
-            {
-                throw new FormatException("Expected a data format message of the form 'data: <MesssageType>'");
-            }
-
             // Skip the "data: " part of the line
             var type = line[_dataPrefix.Length];
             switch (type)
