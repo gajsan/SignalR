@@ -159,11 +159,7 @@ namespace Microsoft.AspNetCore.SignalR
                 {
                     while (connection.Transport.Input.TryRead(out var incomingMessage))
                     {
-                        if (!protocol.TryParseMessage(incomingMessage.Payload, this, out var hubMessage))
-                        {
-                            _logger.LogError("Received invalid message");
-                            throw new InvalidOperationException("Received invalid message");
-                        }
+                        var hubMessage = protocol.ParseMessage(incomingMessage.Payload, this);
 
                         switch (hubMessage)
                         {

@@ -42,11 +42,10 @@ namespace Microsoft.AspNetCore.SignalR.Tests
             _cts = new CancellationTokenSource();
         }
 
-        public async Task<IEnumerable<object>> InvokeAsync(string methodName, params object[] args)
+        public async Task<CompletionMessage> InvokeAsync(string methodName, params object[] args)
         {
             var invocationId = await SendInvocationAsync(methodName, args);
 
-            var results = new List<object>();
             while (true)
             {
                 var message = await Read();
@@ -64,18 +63,9 @@ namespace Microsoft.AspNetCore.SignalR.Tests
                 switch (message)
                 {
                     case StreamItemMessage result:
-                        results.Add(result.Item);
-                        break;
+                        throw new NotSupportedException("TestClient does not support streaming!");
                     case CompletionMessage completion:
-                        if (!string.IsNullOrEmpty(completion.Error))
-                        {
-                            throw new Exception(completion.Error);
-                        }
-                        else if (completion.HasResult)
-                        {
-                            results.Add(completion.Result);
-                        }
-                        return results;
+                        return completion;
                     default:
                         throw new NotSupportedException("TestClient does not support receiving invocations!");
                 }
@@ -85,7 +75,7 @@ namespace Microsoft.AspNetCore.SignalR.Tests
         public async Task<string> SendInvocationAsync(string methodName, params object[] args)
         {
             var invocationId = GetInvocationId();
-            var payload = await _protocol.WriteToArrayAsync(new InvocationMessage(invocationId, methodName, args, nonBlocking: false));
+            var payload = await _protocol.WriteToArrayAsync(new InvocationMessage(invocationId, nonBlocking: false, target: methodName, arguments: args));
 
             await Application.Output.WriteAsync(new Message(payload, _protocol.MessageType, endOfMessage: true));
 
@@ -116,14 +106,7 @@ namespace Microsoft.AspNetCore.SignalR.Tests
         {
             if (Application.Input.TryRead(out var message))
             {
-                if (!_protocol.TryParseMessage(message.Payload, this, out var hubMessage))
-                {
-                    throw new InvalidOperationException("Received invalid message");
-                }
-                else
-                {
-                    return hubMessage;
-                }
+                return _protocol.ParseMessage(message.Payload, this);
             }
             return null;
         }

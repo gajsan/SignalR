@@ -52,7 +52,7 @@ namespace Microsoft.AspNetCore.SignalR
         private Task InvokeAllWhere(string methodName, object[] args, Func<Connection, bool> include)
         {
             var tasks = new List<Task>(_connections.Count);
-            var message = new InvocationMessage(GetInvocationId(), methodName, args, nonBlocking: true);
+            var message = new InvocationMessage(GetInvocationId(), nonBlocking: true, target: methodName, arguments: args);
 
             // TODO: serialize once per format by providing a different stream?
             foreach (var connection in _connections)
@@ -72,7 +72,7 @@ namespace Microsoft.AspNetCore.SignalR
         {
             var connection = _connections[connectionId];
 
-            var message = new InvocationMessage(GetInvocationId(), methodName, args, nonBlocking: true);
+            var message = new InvocationMessage(GetInvocationId(), nonBlocking: true, target: methodName, arguments: args);
 
             return WriteAsync(connection, message);
         }
@@ -123,7 +123,7 @@ namespace Microsoft.AspNetCore.SignalR
 
         private string GetInvocationId()
         {
-            var invocationId = Interlocked.Increment(ref _nextInvocationId) - 1;
+            var invocationId = Interlocked.Increment(ref _nextInvocationId);
             return invocationId.ToString();
         }
     }

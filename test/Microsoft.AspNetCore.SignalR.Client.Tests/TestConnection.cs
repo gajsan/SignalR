@@ -44,6 +44,11 @@ namespace Microsoft.AspNetCore.SignalR.Client.Tests
 
         public async Task SendAsync(byte[] data, MessageType type, CancellationToken cancellationToken)
         {
+            if(!_started.Task.IsCompleted)
+            {
+                throw new InvalidOperationException("Connection must be started before SendAsync can be called");
+            }
+
             var message = new Message(data, type, endOfMessage: true);
             while (await _sentMessages.Out.WaitToWriteAsync(cancellationToken))
             {

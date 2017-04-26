@@ -30,8 +30,7 @@ namespace Microsoft.AspNetCore.SignalR.Client
 
         private readonly CancellationTokenSource _connectionActive = new CancellationTokenSource();
 
-        private readonly object _pendingCallsLock = new object();
-        private readonly Dictionary<string, InvocationRequest> _pendingCalls = new Dictionary<string, InvocationRequest>();
+        private readonly ConcurrentDictionary<string, InvocationRequest> _pendingCalls = new ConcurrentDictionary<string, InvocationRequest>();
         private readonly ConcurrentDictionary<string, InvocationHandler> _handlers = new ConcurrentDictionary<string, InvocationHandler>();
 
         private int _nextId = 0;
@@ -68,6 +67,11 @@ namespace Microsoft.AspNetCore.SignalR.Client
                 throw new ArgumentNullException(nameof(connection));
             }
 
+            if (protocol == null)
+            {
+                throw new ArgumentNullException(nameof(protocol));
+            }
+
             _connection = connection;
             _binder = new HubBinder(this);
             _protocol = protocol;
@@ -100,6 +104,7 @@ namespace Microsoft.AspNetCore.SignalR.Client
         public async Task DisposeAsync()
         {
             await _connection.DisposeAsync();
+
             _httpClient?.Dispose();
         }
 
@@ -120,19 +125,24 @@ namespace Microsoft.AspNetCore.SignalR.Client
         {
             if (_connectionActive.Token.IsCancellationRequested)
             {
+                _logger.LogError("Invoke was called after the connection was terminated");
                 throw new InvalidOperationException("Connection has been terminated.");
             }
 
             _logger.LogTrace("Preparing invocation of '{0}', with return type '{1}' and {2} args", methodName, returnType.AssemblyQualifiedName, args.Length);
 
             // Create an invocation descriptor. Client invocations are always blocking
-            var invocationMessage = new InvocationMessage(GetNextId().ToString(), methodName, args, nonBlocking: false);
+            var invocationMessage = new InvocationMessage(GetNextId().ToString(), nonBlocking: false, target: methodName, arguments: args);
 
             // I just want an excuse to use 'irq' as a variable name...
             _logger.LogDebug("Registering Invocation ID '{0}' for tracking", invocationMessage.InvocationId);
-            var irq = new InvocationRequest(cancellationToken, returnType);
+            var irq = new InvocationRequest(cancellationToken, returnType, invocationMessage.InvocationId, _loggerFactory);
 
-            EnqueueRequest(invocationMessage.InvocationId, irq);
+            if (!_pendingCalls.TryAdd(invocationMessage.InvocationId, irq))
+            {
+                _logger.LogError("A duplicate invocation ID was generated: {invocationId}", invocationMessage.InvocationId);
+                throw new InvalidOperationException("A duplicate invocation ID was generated");
+            }
 
             // Trace the full invocation, but only if that logging level is enabled (because building the args list is a bit slow)
             if (_logger.IsEnabled(LogLevel.Trace))
@@ -153,8 +163,8 @@ namespace Microsoft.AspNetCore.SignalR.Client
             catch (Exception ex)
             {
                 _logger.LogError(0, ex, "Sending Invocation '{invocationId}' failed", invocationMessage.InvocationId);
-                irq.Complete(ex);
-                RemoveRequest(invocationMessage.InvocationId);
+                irq.Fail(ex);
+                _pendingCalls.TryRemove(invocationMessage.InvocationId, out _);
             }
 
             // Return the completion task. It will be completed by ReceiveMessages when the response is received.
@@ -163,11 +173,7 @@ namespace Microsoft.AspNetCore.SignalR.Client
 
         private void OnDataReceived(byte[] data, MessageType messageType)
         {
-            if (!_protocol.TryParseMessage(data, _binder, out var message))
-            {
-                _logger.LogError("Received invalid message");
-                return;
-            }
+            var message = _protocol.ParseMessage(data, _binder);
 
             InvocationRequest irq;
             switch (message)
@@ -181,28 +187,22 @@ namespace Microsoft.AspNetCore.SignalR.Client
                     DispatchInvocation(invocation, _connectionActive.Token);
                     break;
                 case CompletionMessage completion:
-                    lock (_pendingCallsLock)
+                    if (!_pendingCalls.TryRemove(completion.InvocationId, out irq))
                     {
-                        if (!_pendingCalls.TryGetValue(completion.InvocationId, out irq))
-                        {
-                            _logger.LogWarning("Dropped unsolicited Completion message for invocation '{invocationId}'", completion.InvocationId);
-                            return;
-                        }
+                        _logger.LogWarning("Dropped unsolicited Completion message for invocation '{invocationId}'", completion.InvocationId);
+                        return;
                     }
                     DispatchInvocationCompletion(completion, irq, _connectionActive.Token);
-                    RemoveRequest(completion.InvocationId);
+                    irq.Dispose();
                     break;
                 case StreamItemMessage streamItem:
                     // Complete the invocation with an error, we don't support streaming (yet)
-                    lock (_pendingCallsLock)
+                    if (!_pendingCalls.TryRemove(streamItem.InvocationId, out irq))
                     {
-                        if (!_pendingCalls.TryGetValue(streamItem.InvocationId, out irq))
-                        {
-                            _logger.LogWarning("Dropped unsolicited Completion message for invocation '{invocationId}'", streamItem.InvocationId);
-                            return;
-                        }
+                        _logger.LogWarning("Dropped unsolicited Stream Item message for invocation '{invocationId}'", streamItem.InvocationId);
+                        return;
                     }
-                    irq.Complete(new NotSupportedException("Streaming method results are not supported"));
+                    irq.Fail(new NotSupportedException("Streaming method results are not supported"));
                     break;
                 default:
                     throw new InvalidOperationException($"Unknown message type: {message.GetType().FullName}");
@@ -219,19 +219,24 @@ namespace Microsoft.AspNetCore.SignalR.Client
 
             _connectionActive.Cancel();
 
-            lock (_pendingCallsLock)
+            // Keys is a snapshot, so we'll need to run this until other threads stop adding (which they will because of the cancellation token above)
+            for (var i = 0; _pendingCalls.Count > 0; i++)
             {
-                foreach (var call in _pendingCalls.Values)
+                _logger.LogTrace("Clearing pending calls, iteration #{iteration}", i);
+                foreach (var key in _pendingCalls.Keys)
                 {
-                    if (ex != null)
+                    if (_pendingCalls.TryRemove(key, out var call))
                     {
-                        call.Complete(ex);
-                    }
+                        _logger.LogTrace("Removing pending call {invocationId}", call.InvocationId);
+                        if (ex != null)
+                        {
+                            call.Fail(ex);
+                        }
 
-                    // This will cancel the completion if nobody has done so already.
-                    call.Dispose();
+                        // This will cancel the completion if nobody has done so already.
+                        call.Dispose();
+                    }
                 }
-                _pendingCalls.Clear();
             }
         }
 
@@ -249,22 +254,6 @@ namespace Microsoft.AspNetCore.SignalR.Client
             handler.Handler(invocation.Arguments);
         }
 
-        private void DispatchInvocationResult(StreamItemMessage result, InvocationRequest irq, CancellationToken cancellationToken)
-        {
-            _logger.LogInformation("Received Result for Invocation #{0}", result.InvocationId);
-
-            if (cancellationToken.IsCancellationRequested)
-            {
-                return;
-            }
-
-            // If the invocation hasn't been cancelled, dispatch the result
-            if (!irq.CancellationToken.IsCancellationRequested)
-            {
-                irq.ReceiveResult(result.Item);
-            }
-        }
-
         private void DispatchInvocationCompletion(CompletionMessage completion, InvocationRequest irq, CancellationToken cancellationToken)
         {
             _logger.LogInformation("Received Completion for Invocation #{0}", completion.InvocationId);
@@ -279,49 +268,12 @@ namespace Microsoft.AspNetCore.SignalR.Client
             {
                 if (!string.IsNullOrEmpty(completion.Error))
                 {
-                    irq.Complete(new Exception(completion.Error));
+                    irq.Fail(new HubException(completion.Error));
                 }
                 else
                 {
-                    if (completion.HasResult)
-                    {
-                        irq.ReceiveResult(completion.Result);
-                    }
-
-                    irq.Complete();
+                    irq.Complete(completion.Result);
                 }
-            }
-        }
-
-        private void RemoveRequest(string invocationId)
-        {
-            lock (_pendingCallsLock)
-            {
-                if (!_pendingCalls.ContainsKey(invocationId))
-                {
-                    _logger.LogWarning("Duplicate request to remove invocation {invocationId} from the queue ignored", invocationId);
-                }
-                else
-                {
-                    _pendingCalls.Remove(invocationId);
-                }
-            }
-        }
-
-        private void EnqueueRequest(string invocationId, InvocationRequest irq)
-        {
-            if (_connectionActive.IsCancellationRequested)
-            {
-                throw new InvalidOperationException("Connection has been terminated.");
-            }
-
-            lock (_pendingCallsLock)
-            {
-                if (_pendingCalls.ContainsKey(invocationId))
-                {
-                    throw new InvalidOperationException("An invocation with this ID has already been queued");
-                }
-                _pendingCalls.Add(invocationId, irq);
             }
         }
 
@@ -373,53 +325,43 @@ namespace Microsoft.AspNetCore.SignalR.Client
         {
             private readonly TaskCompletionSource<object> _completionSource = new TaskCompletionSource<object>(TaskCreationOptions.RunContinuationsAsynchronously);
             private readonly CancellationTokenRegistration _cancellationTokenRegistration;
-            private object _result;
-            private object _lock = new object();
+            private readonly ILogger _logger;
 
             public Type ResultType { get; }
             public CancellationToken CancellationToken { get; }
+            public string InvocationId { get; }
 
             public Task<object> Completion => _completionSource.Task;
 
-            public InvocationRequest(CancellationToken cancellationToken, Type resultType)
+
+            public InvocationRequest(CancellationToken cancellationToken, Type resultType, string invocationId, ILoggerFactory loggerFactory)
             {
-                CancellationToken = cancellationToken;
+                _logger = loggerFactory.CreateLogger<InvocationRequest>();
                 _cancellationTokenRegistration = cancellationToken.Register(() => _completionSource.TrySetCanceled());
+
+                InvocationId = invocationId;
+                CancellationToken = cancellationToken;
                 ResultType = resultType;
+
+                _logger.LogTrace("Invocation {invocationId} created", InvocationId);
             }
 
-            public void ReceiveResult(object result)
+            public void Fail(Exception exception)
             {
-                lock (_lock)
-                {
-                    if (Completion.IsCompleted)
-                    {
-                        throw new InvalidOperationException("Received a result after completion of the invocation");
-                    }
-                    else
-                    {
-                        _result = result;
-                    }
-                }
+                _logger.LogTrace("Invocation {invocationId} marked as failed", InvocationId);
+                _completionSource.TrySetException(exception);
             }
 
-            public void Complete(Exception ex = null)
+            public void Complete(object result)
             {
-                lock (_lock)
-                {
-                    if (ex != null)
-                    {
-                        _completionSource.TrySetException(ex);
-                    }
-                    else
-                    {
-                        _completionSource.TrySetResult(_result);
-                    }
-                }
+                _logger.LogTrace("Invocation {invocationId} marked as completed", InvocationId);
+                _completionSource.TrySetResult(result);
             }
 
             public void Dispose()
             {
+                _logger.LogTrace("Invocation {invocationId} disposed", InvocationId);
+
                 // Just in case it hasn't already been completed
                 _completionSource.TrySetCanceled();
 

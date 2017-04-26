@@ -2,10 +2,11 @@
 // Licensed under the Apache License, Version 2.0. See License.txt in the project root for license information.
 
 using System;
+using Microsoft.Extensions.Internal;
 
 namespace Microsoft.AspNetCore.SignalR.Internal.Protocol
 {
-    public class CompletionMessage : HubMessage
+    public class CompletionMessage : HubMessage, IEquatable<CompletionMessage>
     {
         public string Error { get; }
         public object Result { get; }
@@ -22,6 +23,29 @@ namespace Microsoft.AspNetCore.SignalR.Internal.Protocol
             HasResult = hasResult;
         }
 
+        public override bool Equals(object obj)
+        {
+            return obj is CompletionMessage m && Equals(m);
+        }
+
+        public override int GetHashCode()
+        {
+            var combiner = new HashCodeCombiner();
+            combiner.Add(InvocationId);
+            combiner.Add(Error);
+            combiner.Add(Result);
+            combiner.Add(HasResult);
+            return combiner.CombinedHash;
+        }
+
+        public bool Equals(CompletionMessage other)
+        {
+            return string.Equals(InvocationId, other.InvocationId, StringComparison.Ordinal) &&
+                string.Equals(Error, other.Error, StringComparison.Ordinal) &&
+                Equals(Result, other.Result) &&
+                HasResult == other.HasResult;
+        }
+
         public override string ToString()
         {
             var errorStr = Error == null ? "<<null>>" : $"\"{Error}\"";
@@ -31,8 +55,6 @@ namespace Microsoft.AspNetCore.SignalR.Internal.Protocol
 
         // Static factory methods. Don't want to use constructor overloading because it will break down
         // if you need to send a payload statically-typed as a string. And because a static factory is clearer here
-        public static CompletionMessage Empty(string invocationId) => new CompletionMessage(invocationId, error: null, result: null, hasResult: false);
-
         public static CompletionMessage WithError(string invocationId, string error) => new CompletionMessage(invocationId, error, result: null, hasResult: false);
 
         public static CompletionMessage WithResult(string invocationId, object payload) => new CompletionMessage(invocationId, error: null, result: payload, hasResult: true);

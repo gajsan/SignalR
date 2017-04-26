@@ -37,17 +37,21 @@ namespace Microsoft.AspNetCore.SignalR.Internal.Protocol
         /// <param name="payloadSerializer">The <see cref="JsonSerializer"/> to use to serialize application payloads (arguments, results, etc.).</param>
         public JsonHubProtocol(JsonSerializer payloadSerializer)
         {
+            if(payloadSerializer == null)
+            {
+                throw new ArgumentNullException(nameof(payloadSerializer));
+            }
+
             _payloadSerializer = payloadSerializer;
         }
 
-        public bool TryParseMessage(ReadOnlySpan<byte> input, IInvocationBinder binder, out HubMessage message)
+        public HubMessage ParseMessage(ReadOnlySpan<byte> input, IInvocationBinder binder)
         {
             // TODO: Need a span-native JSON parser!
             using (var memoryStream = new MemoryStream(input.ToArray()))
             {
-                message = ParseMessage(memoryStream, binder);
+                return ParseMessage(memoryStream, binder);
             }
-            return true;
         }
 
         public bool TryWriteMessage(HubMessage message, IOutput output)
@@ -64,30 +68,24 @@ namespace Microsoft.AspNetCore.SignalR.Internal.Protocol
 
         private HubMessage ParseMessage(Stream input, IInvocationBinder binder)
         {
-            var reader = new JsonTextReader(new StreamReader(input));
-
-            // PERF: Could probably use the JsonTextReader directly for better perf and fewer allocations
-            var json = _payloadSerializer.Deserialize<JObject>(reader);
-            if (json == null)
+            using (var reader = new JsonTextReader(new StreamReader(input)))
             {
-                return null;
-            }
+                // PERF: Could probably use the JsonTextReader directly for better perf and fewer allocations
+                var json = _payloadSerializer.Deserialize<JObject>(reader);
+                if (json == null)
+                {
+                    return null;
+                }
 
-            // Determine the type of the message
-            var type = json.Value<int>(TypePropertyName);
-            switch (type)
-            {
-                case InvocationMessageType:
-                    // Invocation
-                    return BindInvocationMessage(json, binder);
-                case ResultMessageType:
-                    // Result
-                    return BindResultMessage(json, binder);
-                case CompletionMessageType:
-                    // Completion
-                    return BindCompletionMessage(json, binder);
-                default:
-                    throw new FormatException($"Unknown message type: {type}");
+                // Determine the type of the message
+                var type = json.Value<int>(TypePropertyName);
+                switch (type)
+                {
+                    case InvocationMessageType: return BindInvocationMessage(json, binder);
+                    case ResultMessageType: return BindResultMessage(json, binder);
+                    case CompletionMessageType: return BindCompletionMessage(json, binder);
+                    default: throw new FormatException($"Unknown message type: {type}");
+                }
             }
         }
 
@@ -179,7 +177,7 @@ namespace Microsoft.AspNetCore.SignalR.Internal.Protocol
             var nonBlockingProp = json.Property(NonBlockingPropertyName);
             if (nonBlockingProp != null)
             {
-                nonBlocking = nonBlockingProp.Value.ToObject<bool>();
+                nonBlocking = nonBlockingProp.Value.Value<bool>();
             }
 
             var paramTypes = binder.GetParameterTypes(target);
@@ -195,16 +193,16 @@ namespace Microsoft.AspNetCore.SignalR.Internal.Protocol
                 arguments[i] = args[i].ToObject(paramType, _payloadSerializer);
             }
 
-            return new InvocationMessage(invocationId, target, arguments, nonBlocking);
+            return new InvocationMessage(invocationId, nonBlocking, target, arguments);
         }
 
         private StreamItemMessage BindResultMessage(JObject json, IInvocationBinder binder)
         {
             var invocationId = json.Value<string>(InvocationIdPropertyName);
-            var payload = json.Value<JToken>(ResultPropertyName);
+            var result = json.Value<JToken>(ResultPropertyName);
 
             var returnType = binder.GetReturnType(invocationId);
-            return new StreamItemMessage(invocationId, payload?.ToObject(returnType, _payloadSerializer));
+            return new StreamItemMessage(invocationId, result?.ToObject(returnType, _payloadSerializer));
         }
 
         private CompletionMessage BindCompletionMessage(JObject json, IInvocationBinder binder)

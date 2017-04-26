@@ -1,10 +1,8 @@
 ﻿// Copyright (c) .NET Foundation. All rights reserved.
 // Licensed under the Apache License, Version 2.0. See License.txt in the project root for license information.
 
-using System;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.SignalR.Internal;
-using Microsoft.Extensions.Options;
 
 namespace Microsoft.Extensions.DependencyInjection
 {
@@ -17,22 +15,10 @@ namespace Microsoft.Extensions.DependencyInjection
             services.AddSingleton(typeof(IHubProtocolResolver), typeof(DefaultHubProtocolResolver));
             services.AddSingleton(typeof(IHubContext<>), typeof(HubContext<>));
             services.AddSingleton(typeof(HubEndPoint<>), typeof(HubEndPoint<>));
-            services.AddSingleton<IConfigureOptions<SignalROptions>, SignalROptionsSetup>();
             services.AddScoped(typeof(IHubActivator<,>), typeof(DefaultHubActivator<,>));
             services.AddRouting();
 
             return new SignalRBuilder(services);
-        }
-
-        public static ISignalRBuilder AddSignalR(this IServiceCollection services, Action<SignalROptions> setupAction)
-        {
-            return services.AddSignalR().AddSignalROptions(setupAction);
-        }
-
-        public static ISignalRBuilder AddSignalROptions(this ISignalRBuilder builder, Action<SignalROptions> setupAction)
-        {
-            builder.Services.Configure(setupAction);
-            return builder;
         }
     }
 }

@@ -31,7 +31,7 @@ namespace Microsoft.AspNetCore.SignalR.Redis
         private readonly RedisOptions _options;
 
         // This serializer is ONLY use to transmit the data through redis, it has no connection to the serializer used on each connection.
-        private readonly JsonSerializer _serializer = new JsonSerializer()
+        private readonly JsonSerializer _serializer = new JsonSerializer
         {
             // We need to serialize objects "full-fidelity", even if it is noisy, so we preserve the original types
             TypeNameAssemblyFormatHandling = TypeNameAssemblyFormatHandling.Simple,
@@ -87,28 +87,28 @@ namespace Microsoft.AspNetCore.SignalR.Redis
 
         public override Task InvokeAllAsync(string methodName, object[] args)
         {
-            var message = new InvocationMessage(GetInvocationId(), methodName, args, nonBlocking: true);
+            var message = new InvocationMessage(GetInvocationId(), nonBlocking: true, target: methodName, arguments: args);
 
             return PublishAsync(typeof(THub).FullName, message);
         }
 
         public override Task InvokeConnectionAsync(string connectionId, string methodName, object[] args)
         {
-            var message = new InvocationMessage(GetInvocationId(), methodName, args, nonBlocking: true);
+            var message = new InvocationMessage(GetInvocationId(), nonBlocking: true, target: methodName, arguments: args);
 
             return PublishAsync(typeof(THub).FullName + "." + connectionId, message);
         }
 
         public override Task InvokeGroupAsync(string groupName, string methodName, object[] args)
         {
-            var message = new InvocationMessage(GetInvocationId(), methodName, args, nonBlocking: true);
+            var message = new InvocationMessage(GetInvocationId(), nonBlocking: true, target: methodName, arguments: args);
 
             return PublishAsync(typeof(THub).FullName + ".group." + groupName, message);
         }
 
         public override Task InvokeUserAsync(string userId, string methodName, object[] args)
         {
-            var message = new InvocationMessage(GetInvocationId(), methodName, args, nonBlocking: true);
+            var message = new InvocationMessage(GetInvocationId(), nonBlocking: true, target: methodName, arguments: args);
 
             return PublishAsync(typeof(THub).FullName + ".user." + userId, message);
         }
@@ -314,7 +314,7 @@ namespace Microsoft.AspNetCore.SignalR.Redis
 
         private string GetInvocationId()
         {
-            var invocationId = Interlocked.Increment(ref _nextInvocationId) - 1;
+            var invocationId = Interlocked.Increment(ref _nextInvocationId);
             return invocationId.ToString();
         }
 

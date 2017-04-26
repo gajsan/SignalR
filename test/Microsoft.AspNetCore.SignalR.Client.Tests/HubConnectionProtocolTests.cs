@@ -20,6 +20,8 @@ namespace Microsoft.AspNetCore.SignalR.Client.Tests
             var hubConnection = new HubConnection(connection, new JsonHubProtocol(new JsonSerializer()), new LoggerFactory());
             try
             {
+                await hubConnection.StartAsync();
+
                 var invokeTask = hubConnection.Invoke("Foo", typeof(void));
 
                 var invokeMessage = await connection.ReadSentTextMessageAsync().OrTimeout();
@@ -40,6 +42,8 @@ namespace Microsoft.AspNetCore.SignalR.Client.Tests
             var hubConnection = new HubConnection(connection, new JsonHubProtocol(new JsonSerializer()), new LoggerFactory());
             try
             {
+                await hubConnection.StartAsync();
+
                 var invokeTask = hubConnection.Invoke("Foo", typeof(void));
 
                 await connection.ReceiveJsonMessage(new { invocationId = "1", type = 3 }).OrTimeout();
@@ -60,6 +64,8 @@ namespace Microsoft.AspNetCore.SignalR.Client.Tests
             var hubConnection = new HubConnection(connection, new JsonHubProtocol(new JsonSerializer()), new LoggerFactory());
             try
             {
+                await hubConnection.StartAsync();
+
                 var invokeTask = hubConnection.Invoke<int>("Foo");
 
                 await connection.ReceiveJsonMessage(new { invocationId = "1", type = 3, result = 42 }).OrTimeout();
@@ -80,11 +86,13 @@ namespace Microsoft.AspNetCore.SignalR.Client.Tests
             var hubConnection = new HubConnection(connection, new JsonHubProtocol(new JsonSerializer()), new LoggerFactory());
             try
             {
+                await hubConnection.StartAsync();
+
                 var invokeTask = hubConnection.Invoke<int>("Foo");
 
                 await connection.ReceiveJsonMessage(new { invocationId = "1", type = 3, error = "An error occurred" }).OrTimeout();
 
-                var ex = await Assert.ThrowsAsync<Exception>(() => invokeTask).OrTimeout();
+                var ex = await Assert.ThrowsAsync<HubException>(() => invokeTask).OrTimeout();
                 Assert.Equal("An error occurred", ex.Message);
             }
             finally
@@ -102,6 +110,8 @@ namespace Microsoft.AspNetCore.SignalR.Client.Tests
             var hubConnection = new HubConnection(connection, new JsonHubProtocol(new JsonSerializer()), new LoggerFactory());
             try
             {
+                await hubConnection.StartAsync();
+
                 var invokeTask = hubConnection.Invoke<int>("Foo");
 
                 await connection.ReceiveJsonMessage(new { invocationId = "1", type = 2 }).OrTimeout();
@@ -124,6 +134,8 @@ namespace Microsoft.AspNetCore.SignalR.Client.Tests
             var handlerCalled = new TaskCompletionSource<object[]>();
             try
             {
+                await hubConnection.StartAsync();
+
                 hubConnection.On("Foo", new[] { typeof(int), typeof(string), typeof(float) }, (a) => handlerCalled.TrySetResult(a));
 
                 await connection.ReceiveJsonMessage(new { invocationId = "1", type = 1, target = "Foo", arguments = new object[] { 1, "Foo", 2.0f } }).OrTimeout();

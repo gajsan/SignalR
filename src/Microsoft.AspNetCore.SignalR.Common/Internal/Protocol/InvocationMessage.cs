@@ -3,10 +3,11 @@
 
 using System;
 using System.Linq;
+using Microsoft.Extensions.Internal;
 
 namespace Microsoft.AspNetCore.SignalR.Internal.Protocol
 {
-    public class InvocationMessage : HubMessage
+    public class InvocationMessage : HubMessage, IEquatable<InvocationMessage>
     {
         public string Target { get; }
 
@@ -14,7 +15,7 @@ namespace Microsoft.AspNetCore.SignalR.Internal.Protocol
 
         public bool NonBlocking { get; }
 
-        public InvocationMessage(string invocationId, string target, object[] arguments, bool nonBlocking) : base(invocationId)
+        public InvocationMessage(string invocationId, bool nonBlocking, string target, params object[] arguments) : base(invocationId)
         {
             if(string.IsNullOrEmpty(invocationId))
             {
@@ -34,6 +35,29 @@ namespace Microsoft.AspNetCore.SignalR.Internal.Protocol
             Target = target;
             Arguments = arguments;
             NonBlocking = nonBlocking;
+        }
+
+        public override bool Equals(object obj)
+        {
+            return obj is InvocationMessage m && Equals(m);
+        }
+
+        public override int GetHashCode()
+        {
+            var combiner = new HashCodeCombiner();
+            combiner.Add(InvocationId);
+            combiner.Add(Target);
+            combiner.Add(Arguments);
+            combiner.Add(NonBlocking);
+            return combiner.CombinedHash;
+        }
+
+        public bool Equals(InvocationMessage other)
+        {
+            return string.Equals(InvocationId, other.InvocationId, StringComparison.Ordinal) &&
+                string.Equals(Target, other.Target, StringComparison.Ordinal) &&
+                Enumerable.SequenceEqual(Arguments, other.Arguments) &&
+                NonBlocking == other.NonBlocking;
         }
 
         public override string ToString()

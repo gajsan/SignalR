@@ -3,14 +3,12 @@
 
 using System;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.SignalR.Internal.Protocol;
+using Microsoft.AspNetCore.SignalR.Tests.Common;
 using Microsoft.AspNetCore.Sockets;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Internal;
 using Moq;
 using Xunit;
-using Microsoft.AspNetCore.SignalR.Tests.Common;
-using System.Linq;
-using Microsoft.AspNetCore.SignalR.Internal.Protocol;
 
 namespace Microsoft.AspNetCore.SignalR.Tests
 {
@@ -21,7 +19,7 @@ namespace Microsoft.AspNetCore.SignalR.Tests
         {
             var trackDispose = new TrackDispose();
             var serviceProvider = CreateServiceProvider(s => s.AddSingleton(trackDispose));
-            var endPoint = serviceProvider.GetService<HubEndPoint<TestHub>>();
+            var endPoint = serviceProvider.GetService<HubEndPoint<DisposeTrackingHub>>();
 
             using (var client = new TestClient(serviceProvider))
             {
@@ -129,7 +127,7 @@ namespace Microsoft.AspNetCore.SignalR.Tests
             {
                 var endPointTask = endPoint.OnConnectedAsync(client.Connection);
 
-                var result = (await client.InvokeAsync(nameof(MethodHub.TaskValueMethod)).OrTimeout()).Single();
+                var result = (await client.InvokeAsync(nameof(MethodHub.TaskValueMethod)).OrTimeout()).Result;
 
                 // json serializer makes this a long
                 Assert.Equal(42L, result);
@@ -152,9 +150,34 @@ namespace Microsoft.AspNetCore.SignalR.Tests
             {
                 var endPointTask = endPoint.OnConnectedAsync(client.Connection);
 
-                var result = (await client.InvokeAsync("echo", "hello").OrTimeout()).Single();
+                var result = (await client.InvokeAsync("echo", "hello").OrTimeout()).Result;
 
                 Assert.Equal("hello", result);
+
+                // kill the connection
+                client.Dispose();
+
+                await endPointTask.OrTimeout();
+            }
+        }
+
+        [Theory]
+        [InlineData(nameof(MethodHub.MethodThatThrows))]
+        [InlineData(nameof(MethodHub.MethodThatYieldsFailedTask))]
+        public async Task HubMethodCanThrowOrYieldFailedTask(string methodName)
+        {
+            var serviceProvider = CreateServiceProvider();
+
+            var endPoint = serviceProvider.GetService<HubEndPoint<MethodHub>>();
+
+            using (var client = new TestClient(serviceProvider))
+            {
+                var endPointTask = endPoint.OnConnectedAsync(client.Connection);
+
+                var result = (await client.InvokeAsync(methodName).OrTimeout());
+
+                // json serializer makes this a long
+                Assert.Equal("BOOM!", result.Error);
 
                 // kill the connection
                 client.Dispose();
@@ -174,7 +197,7 @@ namespace Microsoft.AspNetCore.SignalR.Tests
             {
                 var endPointTask = endPoint.OnConnectedAsync(client.Connection);
 
-                var result = (await client.InvokeAsync(nameof(MethodHub.ValueMethod)).OrTimeout()).Single();
+                var result = (await client.InvokeAsync(nameof(MethodHub.ValueMethod)).OrTimeout()).Result;
 
                 // json serializer makes this a long
                 Assert.Equal(43L, result);
@@ -197,7 +220,7 @@ namespace Microsoft.AspNetCore.SignalR.Tests
             {
                 var endPointTask = endPoint.OnConnectedAsync(client.Connection);
 
-                var result = (await client.InvokeAsync(nameof(MethodHub.StaticMethod)).OrTimeout()).Single();
+                var result = (await client.InvokeAsync(nameof(MethodHub.StaticMethod)).OrTimeout()).Result;
 
                 Assert.Equal("fromStatic", result);
 
@@ -219,7 +242,7 @@ namespace Microsoft.AspNetCore.SignalR.Tests
             {
                 var endPointTask = endPoint.OnConnectedAsync(client.Connection);
 
-                var result = (await client.InvokeAsync(nameof(MethodHub.VoidMethod)).OrTimeout()).Single();
+                var result = (await client.InvokeAsync(nameof(MethodHub.VoidMethod)).OrTimeout()).Result;
 
                 Assert.Null(result);
 
@@ -241,7 +264,7 @@ namespace Microsoft.AspNetCore.SignalR.Tests
             {
                 var endPointTask = endPoint.OnConnectedAsync(client.Connection);
 
-                var result = (await client.InvokeAsync(nameof(MethodHub.ConcatString), (byte)32, 42, 'm', "string").OrTimeout()).Single();
+                var result = (await client.InvokeAsync(nameof(MethodHub.ConcatString), (byte)32, 42, 'm', "string").OrTimeout()).Result;
 
                 Assert.Equal("32, 42, m, string", result);
 
@@ -263,7 +286,7 @@ namespace Microsoft.AspNetCore.SignalR.Tests
             {
                 var endPointTask = endPoint.OnConnectedAsync(client.Connection);
 
-                var result = (await client.InvokeAsync(nameof(InheritedHub.BaseMethod), "string").OrTimeout()).Single();
+                var result = (await client.InvokeAsync(nameof(InheritedHub.BaseMethod), "string").OrTimeout()).Result;
 
                 Assert.Equal("string", result);
 
@@ -285,7 +308,7 @@ namespace Microsoft.AspNetCore.SignalR.Tests
             {
                 var endPointTask = endPoint.OnConnectedAsync(client.Connection);
 
-                var result = (await client.InvokeAsync(nameof(InheritedHub.VirtualMethod), 10).OrTimeout()).Single();
+                var result = (await client.InvokeAsync(nameof(InheritedHub.VirtualMethod), 10).OrTimeout()).Result;
 
                 Assert.Equal(0L, result);
 
@@ -307,9 +330,9 @@ namespace Microsoft.AspNetCore.SignalR.Tests
             {
                 var endPointTask = endPoint.OnConnectedAsync(client.Connection);
 
-                var ex = await Assert.ThrowsAsync<Exception>(() => client.InvokeAsync(nameof(MethodHub.OnDisconnectedAsync)).OrTimeout());
+                var result = await client.InvokeAsync(nameof(MethodHub.OnDisconnectedAsync)).OrTimeout();
 
-                Assert.Equal("Unknown hub method 'OnDisconnectedAsync'", ex.Message);
+                Assert.Equal("Unknown hub method 'OnDisconnectedAsync'", result.Error);
 
                 // kill the connection
                 client.Dispose();
@@ -384,7 +407,7 @@ namespace Microsoft.AspNetCore.SignalR.Tests
 
                 await Task.WhenAll(firstClient.Connected, secondClient.Connected).OrTimeout();
 
-                var result = (await firstClient.InvokeAsync(nameof(MethodHub.GroupSendMethod), "testGroup", "test").OrTimeout()).Single();
+                var result = (await firstClient.InvokeAsync(nameof(MethodHub.GroupSendMethod), "testGroup", "test").OrTimeout()).Result;
 
                 // check that 'firstConnection' hasn't received the group send
                 Assert.Null(firstClient.TryRead());
@@ -392,7 +415,7 @@ namespace Microsoft.AspNetCore.SignalR.Tests
                 // check that 'secondConnection' hasn't received the group send
                 Assert.Null(secondClient.TryRead());
 
-                result = (await secondClient.InvokeAsync(nameof(MethodHub.GroupAddMethod), "testGroup").OrTimeout()).Single();
+                result = (await secondClient.InvokeAsync(nameof(MethodHub.GroupAddMethod), "testGroup").OrTimeout()).Result;
 
                 await firstClient.SendInvocationAsync(nameof(MethodHub.GroupSendMethod), "testGroup", "test").OrTimeout();
 
@@ -609,6 +632,16 @@ namespace Microsoft.AspNetCore.SignalR.Tests
             {
                 return Task.CompletedTask;
             }
+
+            public void MethodThatThrows()
+            {
+                throw new InvalidOperationException("BOOM!");
+            }
+
+            public Task MethodThatYieldsFailedTask()
+            {
+                return Task.FromException(new InvalidOperationException("BOOM!"));
+            }
         }
 
         private class InheritedHub : BaseHub
@@ -643,11 +676,11 @@ namespace Microsoft.AspNetCore.SignalR.Tests
             }
         }
 
-        private class TestHub : Hub
+        private class DisposeTrackingHub : Hub
         {
             private TrackDispose _trackDispose;
 
-            public TestHub(TrackDispose trackDispose)
+            public DisposeTrackingHub(TrackDispose trackDispose)
             {
                 _trackDispose = trackDispose;
             }

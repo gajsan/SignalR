@@ -247,7 +247,7 @@ namespace Microsoft.AspNetCore.SignalR.Client.Tests
         {
             var mockConnection = new Mock<IConnection>();
 
-            var invocation = new InvocationMessage(Guid.NewGuid().ToString(), "NonExistingMethod123", new object[] { true, "arg2", 123 }, nonBlocking: true);
+            var invocation = new InvocationMessage(Guid.NewGuid().ToString(), nonBlocking: true, target: "NonExistingMethod123", arguments: new object[] { true, "arg2", 123 });
 
             var mockProtocol = MockHubProtocol.ReturnOnParse(invocation);
 
@@ -285,7 +285,7 @@ namespace Microsoft.AspNetCore.SignalR.Client.Tests
                 };
             }
 
-            public bool TryParseMessage(ReadOnlySpan<byte> input, IInvocationBinder binder, out HubMessage message)
+            public HubMessage ParseMessage(ReadOnlySpan<byte> input, IInvocationBinder binder)
             {
                 ParseCalls += 1;
                 if (_error != null)
@@ -294,12 +294,10 @@ namespace Microsoft.AspNetCore.SignalR.Client.Tests
                 }
                 if (_parsed != null)
                 {
-                    message = _parsed;
-                    return true;
+                    return _parsed;
                 }
 
-                message = null;
-                return false;
+                throw new InvalidOperationException("No Parsed Message provided");
             }
 
             public bool TryWriteMessage(HubMessage message, IOutput output)
